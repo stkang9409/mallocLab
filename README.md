@@ -6,5 +6,7 @@
 
 
 ### Explicit
+- LIFO 방식으로 구현하여 자연스럽게 next fit의 개념을 활용합니다.
 
 ### Seglist
+-bestfit과 seglist의 결합으로 구현하여 util을 높였습니다.
