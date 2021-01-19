@@ -24,6 +24,7 @@
 #define CHUNKSIZE (1 << 12) // Extend heap by this amount (bytes)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define PACK(size, alloc) ((size) | (alloc))
 
 #define GET(p) (*(unsigned int *)(p))
@@ -142,12 +143,12 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-
     size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
 
     if ((long)(bp = mem_sbrk(size)) == -1)
+    {
         return NULL;
-
+    }
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
@@ -190,27 +191,34 @@ static void *find_fit(size_t size)
 }
 
 //이상 없음..
-static void place(void *bp, size_t asize)
+static void *place(void *bp, size_t asize)
 {
-
     size_t remainSize = GET_SIZE(HDRP(bp)) - asize;
-    if (remainSize >= 4 * WSIZE)
+    detach_from_list(bp);
+    if (remainSize <= 4 * WSIZE)
+    {
+        PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)), 1));
+        PUT(FTRP(bp), PACK(GET_SIZE(HDRP(bp)), 1));
+    }
+    else if (asize >= 100)
+    {
+        PUT(HDRP(bp), PACK(remainSize, 0));
+        PUT(FTRP(bp), PACK(remainSize, 0));
+        PUT(HDRP(NEXT_BLKP(bp)), PACK(asize, 1));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(asize, 1));
+        update_free(bp);
+        return NEXT_BLKP(bp);
+    }
+    else
     {
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
         PUT(HDRP(NEXT_BLKP(bp)), PACK(remainSize, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(remainSize, 0));
 
-        detach_from_list(bp);
         update_free(NEXT_BLKP(bp));
     }
-    else
-    {
-        PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)), 1));
-        PUT(FTRP(bp), PACK(GET_SIZE(HDRP(bp)), 1));
-
-        detach_from_list(bp);
-    }
+    return bp;
 }
 
 int mm_init(void)
@@ -252,14 +260,14 @@ void *mm_malloc(size_t size)
 
     if ((bp = find_fit(asize)) != NULL)
     {
-        place(bp, asize);
+        bp = place(bp, asize);
         return bp;
     }
     extendsize = MAX(asize, CHUNKSIZE);
     if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
 
-    place(bp, asize);
+    bp = place(bp, asize);
     return bp;
 }
 
@@ -275,46 +283,91 @@ void mm_free(void *ptr)
 
 void *mm_realloc(void *ptr, size_t size)
 {
-    //size < copysize || GET_ALLOC(HDRP(NEXT_BLKP(bp))) == 1 >> move ptr
-    // GET_ALLOC(HDRP(NEXT_BLKP(bp))) == 1 && GET_SIZE(HDRP(NEXT_BLKP(bp))) > size - copysize
-    void *oldptr = ptr;
-    void *bp = ptr;
-    void *newptr;
-    size_t copySize;
-    copySize = GET_SIZE(HDRP(oldptr));
-    if ((GET_ALLOC(HDRP(NEXT_BLKP(bp))) == 1 || size < copySize) || copySize + GET_SIZE(HDRP(NEXT_BLKP(bp))) < DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE))
+    void *new_ptr = ptr; /* Pointer to be returned */
+    void *bp;
+    size_t new_size = size; /* Size of new block */
+    int remainder;          /* Adequacy of block sizes */
+    int extendsize;         /* Size of heap extension */
+    int block_buffer;       /* Size of block buffer */
+
+    /* Ignore invalid block size */
+    if (size == 0)
+        return NULL;
+
+    /* Adjust block size to include boundary tag and alignment requirements */
+    if (new_size <= DSIZE)
     {
-        newptr = mm_malloc(size);
-        if (newptr == NULL)
-            return NULL;
-        if (size < copySize)
-            copySize = size;
-        memcpy(newptr, oldptr, copySize);
-        mm_free(oldptr);
-        return newptr;
-    }
-    else if (size == copySize)
-    {
-        return oldptr;
+        new_size = 2 * DSIZE;
     }
     else
     {
-        size = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-        if (size - copySize < 2 * DSIZE)
+        new_size = ALIGN(size + DSIZE);
+    }
+
+    /* Calculate block buffer */
+    block_buffer = GET_SIZE(HDRP(ptr)) - new_size; //얼마나 더 큰가? 플러스면 작은거, 마이너스면 큰거
+
+    /* Allocate more space if overhead falls below the minimum */
+    if (block_buffer < 0) //늘리고싶다.
+    {
+        if (!GET_ALLOC(HDRP(NEXT_BLKP(ptr))))
         {
-            PUT(HDRP(bp), PACK(size, 1));
-            PUT(FTRP(bp), PACK(size, 1));
+            remainder = GET_SIZE(HDRP(ptr)) + GET_SIZE(HDRP(NEXT_BLKP(ptr))) - new_size;
+            if (remainder >= 0)
+            {
+                detach_from_list(NEXT_BLKP(ptr));
+
+                PUT(HDRP(ptr), PACK(new_size + remainder, 1));
+                PUT(FTRP(ptr), PACK(new_size + remainder, 1));
+            }
+        }
+        else if (!GET_SIZE(HDRP(NEXT_BLKP(ptr))))
+        {
+            remainder = GET_SIZE(HDRP(ptr)) - new_size;
+
+            extendsize = MAX(-remainder, CHUNKSIZE);
+
+            if ((long)(bp = mem_sbrk(extendsize)) == -1)
+            {
+                return NULL;
+            }
+            PUT(HDRP(bp), PACK(extendsize, 0));
+            PUT(FTRP(bp), PACK(extendsize, 0));
+            PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
+
+            PUT(HDRP(ptr), PACK(GET_SIZE(HDRP(ptr)) + extendsize, 0));
+            PUT(FTRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 0));
+
+            size_t remainSize = GET_SIZE(HDRP(ptr)) - new_size;
+            detach_from_list(ptr);
+
+            if (remainSize <= 4 * WSIZE)
+            {
+                PUT(HDRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 1));
+                PUT(FTRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 1));
+            }
+            else
+            {
+                PUT(HDRP(ptr), PACK(new_size, 1));
+                PUT(FTRP(ptr), PACK(new_size, 1));
+                PUT(HDRP(NEXT_BLKP(ptr)), PACK(remainSize, 0));
+                PUT(FTRP(NEXT_BLKP(ptr)), PACK(remainSize, 0));
+
+                update_free(NEXT_BLKP(ptr));
+            }
         }
         else
         {
-            int next_block_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
-            detach_from_list(NEXT_BLKP(bp));
-            PUT(HDRP(bp), PACK(size, 1));
-            PUT(FTRP(bp), PACK(size, 1));
-            PUT(HDRP(NEXT_BLKP(bp)), PACK(copySize + next_block_size - size, 0));
-            PUT(FTRP(NEXT_BLKP(bp)), PACK(copySize + next_block_size - size, 0));
-            update_free(NEXT_BLKP(bp));
+            new_ptr = mm_malloc(new_size - DSIZE);
+            memcpy(new_ptr, ptr, MIN(size, new_size));
+            mm_free(ptr);
         }
-        return ptr;
     }
+
+    /* Tag the next block if block overhead drops below twice the overhead */
+    // if (block_buffer < 4 * REALLOC_BUFFER)
+    //     SET_RATAG(HDRP(NEXT_BLKP(new_ptr)));
+
+    /* Return the reallocated block */
+    return new_ptr;
 }
