@@ -1,5 +1,5 @@
 /*
- * mm-naive.c - The fas444444441111212test, least memory-efficient malloc package.
+ * mm-naive.c - The fas444444441111222test, least memory-efficient malloc package.
  * 
  * In this naive approach, a block is allocated by simply incrementing
  * the brk pointer.  A block is pure payload. There are no headers or
@@ -167,7 +167,7 @@ static void *find_fit(size_t size)
         num++;
     }
 
-    while (num < 26)
+    while (num < 24)
     {
         bp = N(GET_SEGP(num));
         while (bp != NULL)
@@ -223,10 +223,10 @@ static void *place(void *bp, size_t asize)
 
 int mm_init(void)
 {
-    if ((free_listp = mem_sbrk(26 * WSIZE)) == (void *)-1)
+    if ((free_listp = mem_sbrk(24 * WSIZE)) == (void *)-1)
         return -1;
 
-    for (int i = 0; i < 26; i++)
+    for (int i = 0; i < 24; i++)
     {
         PUT(free_listp + i * WSIZE, NULL);
     }
