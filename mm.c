@@ -338,23 +338,8 @@ void *mm_realloc(void *ptr, size_t size)
             PUT(HDRP(ptr), PACK(GET_SIZE(HDRP(ptr)) + extendsize, 0));
             PUT(FTRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 0));
 
-            size_t remainSize = GET_SIZE(HDRP(ptr)) - new_size;
-            detach_from_list(ptr);
-
-            if (remainSize <= 4 * WSIZE)
-            {
-                PUT(HDRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 1));
-                PUT(FTRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 1));
-            }
-            else
-            {
-                PUT(HDRP(ptr), PACK(new_size, 1));
-                PUT(FTRP(ptr), PACK(new_size, 1));
-                PUT(HDRP(NEXT_BLKP(ptr)), PACK(remainSize, 0));
-                PUT(FTRP(NEXT_BLKP(ptr)), PACK(remainSize, 0));
-
-                update_free(NEXT_BLKP(ptr));
-            }
+            PUT(HDRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 1));
+            PUT(FTRP(ptr), PACK(GET_SIZE(HDRP(ptr)), 1));
         }
         else
         {
